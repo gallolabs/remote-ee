@@ -4,6 +4,17 @@ import nock from 'nock'
 import assert from 'assert'
 
 describe('RemoteEventEmitter', () => {
+    afterEach(() => {
+        nock.cleanAll()
+    })
+    before(() => {
+        if (!nock.isActive()) {
+            nock.activate()
+        }
+    })
+    after(() => {
+        nock.restore()
+    })
     it('#emit', async () => {
         const date = new Date()
 
