@@ -1,30 +1,45 @@
 // Thanks Copilot for the generated test
-import { HttpRemoteHandler, RemoteEventEmitter, Event } from './index.js'
+import { HttpTransport, createEventEmitter, createJsonFormatter } from './index.js'
 import nock from 'nock'
+import assert from 'assert'
 
 describe('RemoteEventEmitter', () => {
     it('#emit', async () => {
         const date = new Date()
-        const url = 'http://example.com/event/{eventName}/notify'
-        const event: Event = { name: 'testEvent', date, data: { key: 'value' } }
 
         nock('http://example.com')
-            .post('/event/testEvent/notify', JSON.stringify(event))
+            .matchHeader('content-type', 'application/json')
+            .post('/event/testEvent/notify', JSON.stringify({ date, key2: 'value1', key3: 'value3' }))
             .reply(200)
 
-        const handler = new HttpRemoteHandler({ url })
-        const emitter = new RemoteEventEmitter({
-            processors: [(event) => {
+        const emitter = createEventEmitter({
+            preDispatchHooks: [(event) => {
                 // assert date is ok
                 event.date = date
-                return event
             }],
-            routing: {
-                rules: [{ eventNameMatchs: 'testEvent', handler }]
-            }
+            dispatchRules: [
+                {
+                    matchsEvent: 'testEvent',
+                    preProcessHooks: [(event) => {
+                        event.data.key3 = 'value3'
+                    }],
+                    transport: new HttpTransport({
+                        url: 'http://example.com/event/{eventName}/notify',
+                        method: 'POST'
+                    }),
+                    transform: (event) => ({
+                        date: event.date,
+                        key2: event.data.key1,
+                        key3: event.data.key3
+                    }),
+                    formatter: createJsonFormatter()
+                }
+            ]
         })
 
-        await emitter.emit('testEvent', { key: 'value' })
+        await emitter.emit('testEvent', { key1: 'value1' })
+
+        assert(nock.isDone())
     })
 
 })

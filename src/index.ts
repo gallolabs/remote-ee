@@ -1,6 +1,7 @@
-import got from 'got'
+import got, {Method} from 'got'
 import {isMatch} from 'matcher'
 import uriTemplates, {URITemplate} from 'uri-templates'
+import {cloneDeep} from 'lodash-es'
 
 export interface Event {
     name: string
@@ -8,88 +9,75 @@ export interface Event {
     data: any
 }
 
-export interface RemoteHandler {
-    send: (event: Event) => Promise<void>
+export type EventHook = (event: Event) => Promise<Event | null | undefined> | null | void
+
+export type DispatchStrategy = 'firstMatch' | 'lastMatch' | 'multi'
+
+export interface Transport {
+    send(formattedEvent: FormattedEvent, event: Event): Promise<void>
 }
 
-export interface HttpRemoteHandlerOpts {
-    url: string
-    processors?: EventProcessor[]
-    formatter?: Formatter
+export interface FormattedEvent {
+    contentType: string
+    content: string
 }
-
-export type Formatter = (event: Event) => string
 
 export function createJsonFormatter(): Formatter {
-    return (event: Event) => {
-        return JSON.stringify(event)
-    }
-}
-
-export class HttpRemoteHandler implements RemoteHandler {
-    protected url: URITemplate
-    protected processors: EventProcessor[]
-    protected formatter: Formatter
-
-    public constructor({url, processors, formatter}: HttpRemoteHandlerOpts) {
-        this.url = uriTemplates(url)
-        this.processors = processors || []
-        this.formatter = formatter || createJsonFormatter()
-    }
-
-    public async send(event: Event) {
-        let internalEvent: Event | void = event
-
-        for (const processor of this.processors) {
-            internalEvent = await processor(internalEvent)
-
-            if (!internalEvent) {
-                return
-            }
+    return (data: any) => {
+        return {
+            contentType: 'application/json',
+            content: JSON.stringify(data)
         }
-
-        const formatted = this.formatter(internalEvent)
-        const type = 'application/json'
-
-        await got(this.url.fill({eventName: event.name}), {method: 'POST', body: formatted, headers: {
-            'content-type': type
-        }})
     }
 }
 
-export type RoutingRules = Array<{
-    eventNameMatchs: string | string[]
-    handler: RemoteHandler
+export type Transformer = (event: Event) => Promise<any> | any
+
+export type Formatter = (data: any) => Promise<FormattedEvent> | FormattedEvent
+
+export interface DispatchRule {
+    // matcher interface to allow add match logic ? Note can be done in preProccessHook
+    matchsEvent: string | string[]
     multiStrategy?: 'none' | 'replace' | 'skip'
-}>
-
-export interface RemoteEventEmitterOpts {
-    routing: {
-        rules: RoutingRules
-        strategy?: 'byRules' | 'first' | 'last'
-    }
-    processors?: EventProcessor[]
+    preProcessHooks?: EventHook[]
+    transport: Transport
+    transform?: Transformer
+    formatter: Formatter
 }
 
-export type EventProcessor = (event: Event) => Promise<Event | void> | Event | void
+export interface EventEmitterOpts {
+    preDispatchHooks?: EventHook[]
+    dispatchStrategy?: DispatchStrategy
+    dispatchRules: DispatchRule[]
+}
 
-export class RemoteEventEmitter /*HandableEventEmitter*/ {
-    protected routing: RemoteEventEmitterOpts['routing']
-    protected processors: EventProcessor[]
+export function createEventEmitter(opts: EventEmitterOpts) {
+    return new RemoteEventEmitter(opts)
+}
 
-    public constructor({routing, processors}: RemoteEventEmitterOpts) {
-        this.routing = routing
-        this.processors = processors || []
+class RemoteEventEmitter {
+    protected preDispatchHooks: EventHook[]
+    protected dispatchStrategy: DispatchStrategy
+    protected dispatchRules: DispatchRule[]
+
+    constructor(opts: EventEmitterOpts) {
+        this.preDispatchHooks = opts.preDispatchHooks || []
+        this.dispatchStrategy = opts.dispatchStrategy || 'multi'
+        this.dispatchRules = opts.dispatchRules
     }
 
     public async emit(eventName: string, eventData: any) {
-        let event: Event | void = this.createEvent(eventName, eventData)
+        let event = this.createEvent(eventName, eventData)
 
-        for (const processor of this.processors) {
-            event = await processor(event as Event)
+        for (const hook of this.preDispatchHooks) {
+            const afterHookEvent = await hook(event)
 
-            if (!event) {
+            if (afterHookEvent === null) {
                 return
+            }
+
+            if (afterHookEvent) {
+                event = afterHookEvent
             }
         }
 
@@ -97,23 +85,43 @@ export class RemoteEventEmitter /*HandableEventEmitter*/ {
     }
 
     protected async dispatchEvent(event: Event) {
-        const handlers = this.getHandlersForEvent(event.name)
-        await Promise.all(handlers.map(handler => handler.send(event)))
+        const matchingRules = this.filterMatchingRulesForEvent(event)
+
+        await Promise.all(matchingRules.map(rule => this.dispatchEventOnRule(rule, cloneDeep(event))))
     }
 
-    protected getHandlersForEvent(eventName: string): RemoteHandler[] {
-        const matchingRules = this.routing.rules
-            .filter(rule => isMatch(eventName, rule.eventNameMatchs))
-            //.map(rule => rule.handler)
+    protected async dispatchEventOnRule(rule: DispatchRule, event: Event) {
+        for (const hook of (rule.preProcessHooks || [])) {
+            const afterHookEvent = await hook(event)
+
+            if (afterHookEvent === null) {
+                return
+            }
+
+            if (afterHookEvent) {
+                event = afterHookEvent
+            }
+        }
+
+        const transformed = rule.transform ? await rule.transform(event) : event
+
+        const formatted = await rule.formatter(transformed)
+
+        await rule.transport.send(formatted, event)
+    }
+
+    protected filterMatchingRulesForEvent(event: Event): DispatchRule[] {
+        const matchingRules = this.dispatchRules
+            .filter(rule => isMatch(event.name, rule.matchsEvent))
 
         if (matchingRules.length === 0) {
             return []
         }
 
-        if (this.routing.strategy === 'first') {
-            return [matchingRules[0].handler]
-        } else if (this.routing.strategy === 'last') {
-            return [matchingRules[matchingRules.length - 1].handler]
+        if (this.dispatchStrategy === 'firstMatch') {
+            return [matchingRules[0]]
+        } else if (this.dispatchStrategy === 'lastMatch') {
+            return [matchingRules[matchingRules.length - 1]]
         } else {
             return matchingRules.reduce((filteredMatchingRules, rule) => {
                 if (filteredMatchingRules.length === 0) {
@@ -129,7 +137,7 @@ export class RemoteEventEmitter /*HandableEventEmitter*/ {
                 }
 
                 return filteredMatchingRules
-            }, [] as RoutingRules).map(rule => rule.handler)
+            }, [] as DispatchRule[])
         }
     }
 
@@ -139,6 +147,34 @@ export class RemoteEventEmitter /*HandableEventEmitter*/ {
             date: new Date,
             data: eventData
         }
+    }
+}
+
+export interface HttpTransportOpts {
+    url: string
+    method: Method
+}
+
+export class HttpTransport implements Transport {
+    protected url: URITemplate
+    protected method: Method
+
+    public constructor({url, method}: HttpTransportOpts) {
+        this.url = uriTemplates(url)
+        this.method = method
+    }
+
+    public async send(formattedEvent: FormattedEvent, event: Event) {
+        await got(
+            this.url.fill({eventName: event.name}),
+            {
+                method: this.method,
+                body: formattedEvent.content,
+                headers: {
+                    'content-type': formattedEvent.contentType
+                }
+            }
+        )
     }
 }
 
