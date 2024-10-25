@@ -58,14 +58,15 @@ export class HttpRemoteHandler implements RemoteHandler {
 }
 
 export type RoutingRules = Array<{
-    eventNameMatchs: string | string[],
+    eventNameMatchs: string | string[]
     handler: RemoteHandler
+    multiStrategy?: 'none' | 'replace' | 'skip'
 }>
 
 export interface RemoteEventEmitterOpts {
     routing: {
         rules: RoutingRules
-        strategy?: 'all' | 'first' | 'last'
+        strategy?: 'byRules' | 'first' | 'last'
     }
     processors?: EventProcessor[]
 }
@@ -101,16 +102,34 @@ export class RemoteEventEmitter /*HandableEventEmitter*/ {
     }
 
     protected getHandlersForEvent(eventName: string): RemoteHandler[] {
-        const matchingHandlers = this.routing.rules
+        const matchingRules = this.routing.rules
             .filter(rule => isMatch(eventName, rule.eventNameMatchs))
-            .map(rule => rule.handler)
+            //.map(rule => rule.handler)
+
+        if (matchingRules.length === 0) {
+            return []
+        }
 
         if (this.routing.strategy === 'first') {
-            return [matchingHandlers[0]]
+            return [matchingRules[0].handler]
         } else if (this.routing.strategy === 'last') {
-            return [matchingHandlers[matchingHandlers.length - 1]]
+            return [matchingRules[matchingRules.length - 1].handler]
         } else {
-            return matchingHandlers
+            return matchingRules.reduce((filteredMatchingRules, rule) => {
+                if (filteredMatchingRules.length === 0) {
+                    filteredMatchingRules.push(rule)
+                } else {
+                    if (rule.multiStrategy === 'replace') {
+                        filteredMatchingRules = [rule]
+                    } else if (rule.multiStrategy === 'skip') {
+                        // do nothing
+                    } else {
+                        filteredMatchingRules.push(rule)
+                    }
+                }
+
+                return filteredMatchingRules
+            }, [] as RoutingRules).map(rule => rule.handler)
         }
     }
 
