@@ -14,6 +14,7 @@
   "devDependencies": {
     "@types/mocha": "^10.0.6",
     "@types/node": "^20.10.4",
+    "@types/uri-templates": "^0.1.34",
     "c8": "^10.1.2",
     "mocha": "^10.2.0",
     "release-it": "^17.0.1",
@@ -27,5 +28,10 @@
   },
   "workspaces": [
     "."
-  ]
+  ],
+  "dependencies": {
+    "got": "^14.4.3",
+    "matcher": "^5.0.0",
+    "uri-templates": "^0.2.0"
+  }
 }
