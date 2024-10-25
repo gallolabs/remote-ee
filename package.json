@@ -32,6 +32,7 @@
     "."
   ],
   "dependencies": {
+    "@gallolabs/nanodate": "^0.2.3",
     "got": "^14.4.3",
     "lodash-es": "^4.17.21",
     "matcher": "^5.0.0",

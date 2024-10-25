@@ -2,10 +2,12 @@ import got, {Method} from 'got'
 import {isMatch} from 'matcher'
 import uriTemplates, {URITemplate} from 'uri-templates'
 import {cloneDeep} from 'lodash-es'
+import NanoDate from '@gallolabs/nanodate'
 
 export interface Event {
     name: string
-    date: Date
+    date: NanoDate
+    uid: string
     data: any
 }
 
@@ -49,6 +51,7 @@ export interface EventEmitterOpts {
     preDispatchHooks?: EventHook[]
     dispatchStrategy?: DispatchStrategy
     dispatchRules: DispatchRule[]
+    uidGenerator?: () => string
 }
 
 export function createEventEmitter(opts: EventEmitterOpts) {
@@ -59,11 +62,13 @@ class RemoteEventEmitter {
     protected preDispatchHooks: EventHook[]
     protected dispatchStrategy: DispatchStrategy
     protected dispatchRules: DispatchRule[]
+    protected uidGenerator: () => string
 
     constructor(opts: EventEmitterOpts) {
         this.preDispatchHooks = opts.preDispatchHooks || []
         this.dispatchStrategy = opts.dispatchStrategy || 'multi'
         this.dispatchRules = opts.dispatchRules
+        this.uidGenerator = opts.uidGenerator || (() => Math.random().toString(36).substring(2))
     }
 
     public async emit(eventName: string, eventData: any) {
@@ -144,7 +149,8 @@ class RemoteEventEmitter {
     protected createEvent(eventName: string, eventData: any): Event {
         return {
             name: eventName,
-            date: new Date,
+            date: new NanoDate,
+            uid: this.uidGenerator(),
             data: eventData
         }
     }

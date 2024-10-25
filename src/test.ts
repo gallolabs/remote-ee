@@ -2,6 +2,7 @@
 import { HttpTransport, createEventEmitter, createJsonFormatter } from './index.js'
 import nock from 'nock'
 import assert from 'assert'
+import NanoDate from '@gallolabs/nanodate'
 
 describe('RemoteEventEmitter', () => {
     afterEach(() => {
@@ -16,7 +17,7 @@ describe('RemoteEventEmitter', () => {
         nock.restore()
     })
     it('#emit', async () => {
-        const date = new Date()
+        const date = new NanoDate()
 
         nock('http://example.com')
             .matchHeader('content-type', 'application/json')
@@ -32,6 +33,7 @@ describe('RemoteEventEmitter', () => {
                 {
                     matchsEvent: 'testEvent',
                     preProcessHooks: [(event) => {
+                        console.log(event)
                         event.data.key3 = 'value3'
                     }],
                     transport: new HttpTransport({
