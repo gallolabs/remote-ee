@@ -3,9 +3,50 @@
   <p align="center"><strong>Remote Event Emitter</strong></p>
 </p>
 
-Emit events to a remote system.
+Like EventEmitter, but to remote listeners.
+
+```typescript
+import {createEventEmitter, HttpTransport, createJsonFormatter} from '@gallolabs/remote-ee'
+
+// Example of central events dispatch delegation
+const remoteEE = createEventEmitter({
+    listeners: [{
+        matchsEventName: '*',
+        transport: new HttpTransport({
+            url: 'http://event-handler/handle',
+            method: 'POST'
+        }),
+        formatter: createJsonFormatter()
+    }]
+})
+
+remoteEE.emit('app.something.done', { thing: 'foo', time: 3788 })
+
+// Example of configured listeners
+const remoteEE = createEventEmitter({
+    listeners: [
+        {
+            matchsEventName: ['app.something.*', '!app.something.pending'],
+            transport: new HttpTransport({
+                url: 'http://status-service/handle/{eventName}',
+                method: 'POST'
+            }),
+            transform: event => ({
+                date: event.date,
+                ...event.data
+            }),
+            formatter: createJsonFormatter()
+        },
+        {
+            ...
+        }
+    ]
+})
+
+```
 
 TODO:
 - Add hook support ?
 - Add global error handling like logger
 - Add ability to switch error handling in call or global (hook vs event)
+- Url replacement with any var of event ? ex: {data.value1} or {data.name}
