@@ -21,21 +21,27 @@ describe('RemoteEventEmitter', () => {
 
         nock('http://example.com')
             .matchHeader('content-type', 'application/json')
-            .post('/event/testEvent/notify', JSON.stringify({ date, key2: 'value1', key3: 'value3' }))
+            .post('/event/app-foo-bar/notify', JSON.stringify({ date, key2: 'value1', key3: 'value3' }))
             .reply(200)
 
         const emitter = createEventEmitter({
-            preDispatchHooks: [(event) => {
+            preDispatch(event) {
                 // assert date is ok
                 event.date = date
-            }],
-            dispatchRules: [
+            },
+            listeners: [
                 {
-                    matchsEvent: 'testEvent',
-                    preProcessHooks: [(event) => {
-                        console.log(event)
-                        event.data.key3 = 'value3'
-                    }],
+                    matchsEventName: 'app.foo.bar',
+                    preProcess(event) {
+                        return {
+                            ...event,
+                            name: event.name.replace(/\./g, '-'),
+                            data: {
+                                ...event.data,
+                                key3: 'value3'
+                            }
+                        }
+                    },
                     transport: new HttpTransport({
                         url: 'http://example.com/event/{eventName}/notify',
                         method: 'POST'
@@ -50,7 +56,8 @@ describe('RemoteEventEmitter', () => {
             ]
         })
 
-        assert.strictEqual(true, await emitter.emit('testEvent', { key1: 'value1' }))
+        assert.strictEqual(true, await emitter.emit('app.foo.bar', { key1: 'value1' }))
+        assert.strictEqual(false, await emitter.emit('app.foo.baz', { key1: 'value1' }))
 
         assert(nock.isDone())
     })

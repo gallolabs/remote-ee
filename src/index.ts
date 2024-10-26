@@ -11,7 +11,7 @@ export interface Event {
     data: any
 }
 
-export type EventHook = (event: Event) => Promise<Event | null | undefined> | null | void
+export type EventHook = (event: Event) => Promise<Event | null | undefined> | null | void | Event
 
 export type DispatchStrategy = 'firstMatch' | 'lastMatch' | 'multi'
 
@@ -37,20 +37,20 @@ export type Transformer = (event: Event) => Promise<any> | any
 
 export type Formatter = (data: any) => Promise<FormattedEvent> | FormattedEvent
 
-export interface DispatchRule {
+export interface Listener {
     // matcher interface to allow add match logic ? Note can be done in preProccessHook
-    matchsEvent: string | string[]
+    matchsEventName: string | string[]
     multiStrategy?: 'none' | 'replace' | 'skip'
-    preProcessHooks?: EventHook[]
+    preProcess?: EventHook | EventHook[]
     transport: Transport
     transform?: Transformer
     formatter: Formatter
 }
 
 export interface EventEmitterOpts {
-    preDispatchHooks?: EventHook[]
+    preDispatch?: EventHook | EventHook[]
     dispatchStrategy?: DispatchStrategy
-    dispatchRules: DispatchRule[]
+    listeners: Listener[]
     uidGenerator?: () => string
 }
 
@@ -59,31 +59,39 @@ export function createEventEmitter(opts: EventEmitterOpts) {
 }
 
 class RemoteEventEmitter {
-    protected preDispatchHooks: EventHook[]
+    protected preDispatch?: EventHook | EventHook[]
     protected dispatchStrategy: DispatchStrategy
-    protected dispatchRules: DispatchRule[]
+    protected listeners: Listener[]
     protected uidGenerator: () => string
 
     constructor(opts: EventEmitterOpts) {
-        this.preDispatchHooks = opts.preDispatchHooks || []
+        this.preDispatch = opts.preDispatch
         this.dispatchStrategy = opts.dispatchStrategy || 'multi'
-        this.dispatchRules = opts.dispatchRules
+        this.listeners = opts.listeners
         this.uidGenerator = opts.uidGenerator || (() => Math.random().toString(36).substring(2))
     }
 
     public async emit(eventName: string, eventData: any): Promise<boolean> {
-        const event = await this.applyHooks(this.preDispatchHooks, this.createEvent(eventName, eventData))
+        const event = await this.applyHooks(this.preDispatch, this.createEvent(eventName, eventData))
 
         if (!event) {
             return false
         }
 
-        const matchingRules = this.filterMatchingRulesForEvent(event)
+        const matchingRules = this.filterMatchingListenersForEvent(event)
 
-        return (await Promise.all(matchingRules.map(rule => this.emitEventOnRule(rule, cloneDeep(event))))).some(v => v)
+        return (await Promise.all(matchingRules.map(rule => this.emitEventOnListener(rule, cloneDeep(event))))).some(v => v)
     }
 
-    protected async applyHooks(hooks: EventHook[], event: Event): Promise<Event | void> {
+    // Not sure the real added value for hooks, a simple fn can make the job
+    // fn[] is good to add fns like plugins, but wait ... I don't need it for now !
+    protected async applyHooks(hooks: void | EventHook | EventHook[], event: Event): Promise<Event | void> {
+        if (!hooks) {
+            return event
+        }
+
+        hooks = Array.isArray(hooks) ? hooks : [hooks]
+
         for (const hook of hooks) {
             const afterHookEvent = await hook(event)
 
@@ -99,8 +107,8 @@ class RemoteEventEmitter {
         return event
     }
 
-    protected async emitEventOnRule(rule: DispatchRule, event: Event): Promise<boolean> {
-        const postHooksEvent = await this.applyHooks(rule.preProcessHooks || [], event)
+    protected async emitEventOnListener(rule: Listener, event: Event): Promise<boolean> {
+        const postHooksEvent = await this.applyHooks(rule.preProcess, event)
 
         if (!postHooksEvent) {
             return false
@@ -117,9 +125,9 @@ class RemoteEventEmitter {
         return true
     }
 
-    protected filterMatchingRulesForEvent(event: Event): DispatchRule[] {
-        const matchingRules = this.dispatchRules
-            .filter(rule => isMatch(event.name, rule.matchsEvent))
+    protected filterMatchingListenersForEvent(event: Event): Listener[] {
+        const matchingRules = this.listeners
+            .filter(rule => isMatch(event.name, rule.matchsEventName))
 
         if (matchingRules.length === 0) {
             return []
@@ -144,7 +152,7 @@ class RemoteEventEmitter {
                 }
 
                 return filteredMatchingRules
-            }, [] as DispatchRule[])
+            }, [] as Listener[])
         }
     }
 
