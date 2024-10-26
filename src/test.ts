@@ -50,7 +50,7 @@ describe('RemoteEventEmitter', () => {
             ]
         })
 
-        await emitter.emit('testEvent', { key1: 'value1' })
+        assert.strictEqual(true, await emitter.emit('testEvent', { key1: 'value1' }))
 
         assert(nock.isDone())
     })

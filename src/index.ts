@@ -71,32 +71,20 @@ class RemoteEventEmitter {
         this.uidGenerator = opts.uidGenerator || (() => Math.random().toString(36).substring(2))
     }
 
-    public async emit(eventName: string, eventData: any) {
-        let event = this.createEvent(eventName, eventData)
+    public async emit(eventName: string, eventData: any): Promise<boolean> {
+        const event = await this.applyHooks(this.preDispatchHooks, this.createEvent(eventName, eventData))
 
-        for (const hook of this.preDispatchHooks) {
-            const afterHookEvent = await hook(event)
-
-            if (afterHookEvent === null) {
-                return
-            }
-
-            if (afterHookEvent) {
-                event = afterHookEvent
-            }
+        if (!event) {
+            return false
         }
 
-        await this.dispatchEvent(event)
-    }
-
-    protected async dispatchEvent(event: Event) {
         const matchingRules = this.filterMatchingRulesForEvent(event)
 
-        await Promise.all(matchingRules.map(rule => this.dispatchEventOnRule(rule, cloneDeep(event))))
+        return (await Promise.all(matchingRules.map(rule => this.emitEventOnRule(rule, cloneDeep(event))))).some(v => v)
     }
 
-    protected async dispatchEventOnRule(rule: DispatchRule, event: Event) {
-        for (const hook of (rule.preProcessHooks || [])) {
+    protected async applyHooks(hooks: EventHook[], event: Event): Promise<Event | void> {
+        for (const hook of hooks) {
             const afterHookEvent = await hook(event)
 
             if (afterHookEvent === null) {
@@ -107,12 +95,26 @@ class RemoteEventEmitter {
                 event = afterHookEvent
             }
         }
+
+        return event
+    }
+
+    protected async emitEventOnRule(rule: DispatchRule, event: Event): Promise<boolean> {
+        const postHooksEvent = await this.applyHooks(rule.preProcessHooks || [], event)
+
+        if (!postHooksEvent) {
+            return false
+        }
+
+        event = postHooksEvent
 
         const transformed = rule.transform ? await rule.transform(event) : event
 
         const formatted = await rule.formatter(transformed)
 
         await rule.transport.send(formatted, event)
+
+        return true
     }
 
     protected filterMatchingRulesForEvent(event: Event): DispatchRule[] {
