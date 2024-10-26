@@ -33,6 +33,24 @@ export function createJsonFormatter(): Formatter {
     }
 }
 
+interface ErrorDetails {
+    event?: Event
+    listener?: Listener
+}
+
+export class EmitError extends Error {
+    name = 'EmitError'
+    event?: Event
+    listener?: Listener
+    constructor(message: string, options: ErrorOptions & ErrorDetails) {
+        super(message, {cause: options.cause})
+        this.event = options.event
+        this.listener = options.listener
+    }
+}
+
+export type ErrorHandler = (error: EmitError) => void | Promise<void>
+
 export type Transformer = (event: Event) => Promise<any> | any
 
 export type Formatter = (data: any) => Promise<FormattedEvent> | FormattedEvent
@@ -43,6 +61,7 @@ export interface Listener {
     multiStrategy?: 'none' | 'replace' | 'skip'
     preProcess?: EventHook | EventHook[]
     transport: Transport
+    // format: { transform, stringifier }
     transform?: Transformer
     formatter: Formatter
 }
@@ -52,6 +71,7 @@ export interface EventEmitterOpts {
     dispatchStrategy?: DispatchStrategy
     listeners: Listener[]
     uidGenerator?: () => string
+    onError?: ErrorHandler
 }
 
 export function createEventEmitter(opts: EventEmitterOpts) {
@@ -63,24 +83,81 @@ class RemoteEventEmitter {
     protected dispatchStrategy: DispatchStrategy
     protected listeners: Listener[]
     protected uidGenerator: () => string
+    protected onError?: ErrorHandler
 
     constructor(opts: EventEmitterOpts) {
         this.preDispatch = opts.preDispatch
         this.dispatchStrategy = opts.dispatchStrategy || 'multi'
         this.listeners = opts.listeners
         this.uidGenerator = opts.uidGenerator || (() => Math.random().toString(36).substring(2))
+        this.onError = opts.onError
     }
 
+    /**
+     * @return if the event has been delivered to some listeners (add more precise output ?)
+     */
     public async emit(eventName: string, eventData: any): Promise<boolean> {
-        const event = await this.applyHooks(this.preDispatch, this.createEvent(eventName, eventData))
+        let event
+        try {
+            event = this.createEvent(eventName, eventData)
+        } catch (error) {
+            this.handleError(error as Error, {})
+            return false
+        }
+        try {
+            const postHooksEvent = await this.applyHooks(this.preDispatch, event)
 
-        if (!event) {
+            if (!postHooksEvent) {
+                return false
+            }
+
+            event = postHooksEvent
+        } catch (error) {
+            this.handleError(error as Error, {
+                event
+            })
             return false
         }
 
         const matchingRules = this.filterMatchingListenersForEvent(event)
 
-        return (await Promise.all(matchingRules.map(rule => this.emitEventOnListener(rule, cloneDeep(event))))).some(v => v)
+        return (
+            await Promise.all(
+                matchingRules
+                .map(listener =>
+                    this.emitEventOnListener(listener, cloneDeep(event))
+                    .catch((error) => {
+                        this.handleError(error as Error, {
+                            event,
+                            listener
+                        })
+                        return false
+                    })
+                )
+            )
+        ).some(v => v)
+    }
+
+    /**
+     * @todo
+     */
+    public async waitForIdle() {
+    }
+
+    protected async handleError(error: Error, details: ErrorDetails) {
+        let msg = 'Error while logging'
+        if (details.listener) {
+            msg += ' on listener ' + JSON.stringify(details.listener)
+        }
+        msg += ' : ' + error.message
+        const loggingError = new EmitError(msg, {cause: error, ...details})
+        if (!this.onError) {
+            //process.nextTick(() => {
+                throw loggingError
+            //})
+            return
+        }
+        this.onError(loggingError)
     }
 
     // Not sure the real added value for hooks, a simple fn can make the job

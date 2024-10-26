@@ -40,13 +40,15 @@ const remoteEE = createEventEmitter({
         {
             ...
         }
-    ]
+    ],
+    onError() {...}
 })
 
 ```
 
 TODO:
+- Implement waitForIdle
 - Add hook support ?
-- Add global error handling like logger
 - Add ability to switch error handling in call or global (hook vs event)
 - Url replacement with any var of event ? ex: {data.value1} or {data.name}
+- move transform and formatter into format section ? because it's format, where transform is transform data and formatter is stringify
